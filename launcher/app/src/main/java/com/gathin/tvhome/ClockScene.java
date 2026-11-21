@@ -15,54 +15,85 @@ import android.os.Looper;
 import android.util.DisplayMetrics;
 import android.view.View;
 import android.widget.ImageView;
+import android.widget.TextView;
 
+import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 
 /**
- * The clock screensaver's scene (layout dream_clock): the thin clock and date on black over a slow ambient
- * glow. Every minute the clock drifts to a new spot and the glow shifts colour, so nothing burns in; a
- * ClockRefresh keeps its TextClocks current where Android would not.
- * Shared by ClockDream (the system screensaver) and ClockActivity (Home left idle).
+ * Screensaver scene (layout dream_clock):
+ * - Nature or Art modes: rotated CC0/public-domain 1080p pictures with smooth crossfades,
+ *   top-left time + weather, bottom-right artwork/photo title and author/location.
+ * - Clock mode: classic drifting clock and date on black over a slow ambient glow.
  */
 final class ClockScene {
 
     private static final long MOVE_MS = 60_000L;
-    /** The glow's colour change: 16 steps over 8 s. Animated per frame it redrew the full-screen gradient ~480 times. */
+    private static final long ROTATION_MS = 60_000L;
     private static final int GLOW_STEPS = 16;
     private static final long GLOW_STEP_MS = 500L;
-    /** Deep, low-brightness glow colours; the glow is drawn at partial alpha on black. */
     private static final int[] PALETTE = {0xFF2B5CFF, 0xFF00A39A, 0xFF8A3FFC, 0xFFE0661B, 0xFFD6336C};
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Random random = new Random();
+    private final Context context;
     private final View content;
     private final ClockRefresh clockRefresh;
     private final ImageView ambient;
+    private final ImageView ambientNext;
+    private final View topLeft;
+    private final TextView dreamWeather;
+    private final View bottomRight;
+    private final TextView artworkTitle;
+    private final TextView artworkSubtitle;
+
     private final GradientDrawable glow;
     private int colorIndex;
     private int glowColor;
-    /** clock_wallpaper or clock_glow false: something else (a picture, or plain black) replaced the coloured glow. */
     private boolean wallpaperShown;
-    /** clock_wallpaper: the picture start() decodes, its darkening, and the resources to draw it with. */
+
     private File wallpaperFile;
     private int wallpaperShade;
     private Resources wallpaperRes;
-    /** One number per decode request: a result whose number is no longer the current one is dropped. Main thread only. */
     private int wallpaperGeneration;
-    /** clock_wallpaper with a collection: the pictures, how long each lasts, and how the next one is picked. */
     private List<File> rotation;
     private long rotationMs;
     private long shownMs;
     private String order;
     private Map<String, Set<String>> moods;
     private String latitude, longitude;
+
+    // Custom screensaver mode fields
+    static class Item {
+        final File file;
+        final String title;
+        final String subtitle;
+        Item(File file, String title, String subtitle) {
+            this.file = file;
+            this.title = title;
+            this.subtitle = subtitle;
+        }
+    }
+
+    private String screensaverMode = "nature";
+    private final List<Item> screensaverItems = new ArrayList<>();
+    private int screensaverIndex = 0;
+    private Bitmap currentBmp = null;
+    private Bitmap nextBmp = null;
+    private int itemGeneration = 0;
 
     private final Runnable tick = new Runnable() {
         @Override
@@ -74,11 +105,25 @@ final class ClockScene {
         }
     };
 
-    /** root is the inflated dream_clock layout. */
+    private final Runnable screensaverRotate = new Runnable() {
+        @Override
+        public void run() {
+            advanceScreensaverImage();
+        }
+    };
+
     ClockScene(View root) {
+        context = root.getContext();
         content = root.findViewById(R.id.dreamContent);
         clockRefresh = new ClockRefresh(content);
         ambient = root.findViewById(R.id.dreamAmbient);
+        ambientNext = root.findViewById(R.id.dreamAmbientNext);
+        topLeft = root.findViewById(R.id.dreamTopLeft);
+        dreamWeather = root.findViewById(R.id.dreamWeather);
+        bottomRight = root.findViewById(R.id.dreamBottomRight);
+        artworkTitle = root.findViewById(R.id.dreamArtworkTitle);
+        artworkSubtitle = root.findViewById(R.id.dreamArtworkSubtitle);
+
         glow = new GradientDrawable();
         glow.setGradientType(GradientDrawable.RADIAL_GRADIENT);
         ambient.setBackground(glow);
@@ -89,6 +134,25 @@ final class ClockScene {
     }
 
     void start() {
+        screensaverMode = context.getSharedPreferences(Config.SETTINGS_NAME, Context.MODE_PRIVATE)
+                .getString("screensaver_mode", "nature");
+
+        if ("nature".equals(screensaverMode) || "art".equals(screensaverMode) || "mix".equals(screensaverMode)) {
+            loadScreensaverItems(screensaverMode);
+            if (!screensaverItems.isEmpty()) {
+                startImageScreensaver();
+                return;
+            }
+        }
+
+        // Fallback or "clock" mode
+        startClockScreensaver();
+    }
+
+    private void startClockScreensaver() {
+        if (topLeft != null) topLeft.setVisibility(View.GONE);
+        if (bottomRight != null) bottomRight.setVisibility(View.GONE);
+        content.setVisibility(View.VISIBLE);
         content.setAlpha(0f);
         content.post(() -> {
             placeClock();
@@ -100,21 +164,198 @@ final class ClockScene {
         if (wallpaperFile != null && !wallpaperShown) loadWallpaper();
     }
 
-    void stop() {
-        handler.removeCallbacksAndMessages(null);   // the tick and any glow steps still queued
-        clockRefresh.stop();
-        content.animate().cancel();
-        wallpaperGeneration++;   // a decode still running must not attach its picture to a stopped scene
+    private void startImageScreensaver() {
+        content.setVisibility(View.GONE);
+        ambient.setBackground(null);
+        if (topLeft != null) {
+            topLeft.setVisibility(View.VISIBLE);
+            updateWeatherText();
+        }
+        if (bottomRight != null) {
+            bottomRight.setVisibility(View.VISIBLE);
+            bottomRight.setAlpha(0f);
+        }
+
+        screensaverIndex = 0;
+        showFirstScreensaverImage();
     }
 
-    /**
-     * clock_wallpaper: put the picture Home is showing behind the clock, darkened by clock_wallpaper_dim, in
-     * place of the glow, and carry a collection's rotation on while the screensaver is up. Decoded off the main
-     * thread at screen size in RGB_565 (4 MB at 1080p), like Home's own; until then, or if it cannot be read,
-     * the glow stays.
-     * Call before start(), which starts the decode (again after a stop() that dropped an unfinished one).
-     */
+    private void updateWeatherText() {
+        if (dreamWeather == null) return;
+        String w = WeatherManager.getCachedNow(context);
+        if (w != null && !w.isEmpty()) {
+            dreamWeather.setText(w);
+            dreamWeather.setVisibility(View.VISIBLE);
+        } else {
+            dreamWeather.setVisibility(View.GONE);
+        }
+    }
+
+    private void loadScreensaverItems(String mode) {
+        screensaverItems.clear();
+        if ("mix".equals(mode)) {
+            loadDirectoryItems(new File("/sdcard/Android/data/com.gathin.tvhome/files/screensaver/nature"));
+            loadDirectoryItems(new File("/sdcard/Android/data/com.gathin.tvhome/files/screensaver/art"));
+        } else {
+            loadDirectoryItems(new File("/sdcard/Android/data/com.gathin.tvhome/files/screensaver/" + mode));
+        }
+        if (!screensaverItems.isEmpty()) {
+            Collections.shuffle(screensaverItems, random);
+        }
+    }
+
+    private void loadDirectoryItems(File dir) {
+        if (!dir.exists() || !dir.isDirectory()) return;
+
+        Map<String, String[]> captions = new HashMap<>();
+        File capFile = new File(dir, "captions.txt");
+        if (capFile.exists()) {
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(new FileInputStream(capFile), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    line = line.trim();
+                    if (line.isEmpty()) continue;
+                    String[] parts = line.split("\t");
+                    if (parts.length >= 2) {
+                        String sub = parts.length >= 3 ? parts[2] : "";
+                        captions.put(parts[0], new String[]{parts[1], sub});
+                    }
+                }
+            } catch (Exception ignored) {}
+        }
+
+        File[] files = dir.listFiles((d, name) -> {
+            String lower = name.toLowerCase();
+            return lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png");
+        });
+        if (files != null) {
+            for (File f : files) {
+                String[] meta = captions.get(f.getName());
+                if (meta != null) {
+                    screensaverItems.add(new Item(f, meta[0], meta[1]));
+                } else {
+                    screensaverItems.add(new Item(f, f.getName(), ""));
+                }
+            }
+        }
+    }
+
+    private void showFirstScreensaverImage() {
+        if (screensaverItems.isEmpty()) return;
+        Item item = screensaverItems.get(screensaverIndex);
+        DisplayMetrics dm = context.getResources().getDisplayMetrics();
+        int w = dm.widthPixels, h = dm.heightPixels;
+        int gen = ++itemGeneration;
+
+        new Thread(() -> {
+            Bitmap bmp = decode(item.file, w, h);
+            if (bmp == null) return;
+            handler.post(() -> {
+                if (gen != itemGeneration) {
+                    bmp.recycle();
+                    return;
+                }
+                ambient.setImageBitmap(bmp);
+                ambient.setAlpha(0f);
+                ambient.animate().alpha(1f).setDuration(1200).start();
+                currentBmp = bmp;
+
+                if (artworkTitle != null) artworkTitle.setText(item.title);
+                if (artworkSubtitle != null) artworkSubtitle.setText(item.subtitle);
+                if (bottomRight != null) {
+                    bottomRight.animate().alpha(1f).setDuration(1200).start();
+                }
+
+                handler.removeCallbacks(screensaverRotate);
+                handler.postDelayed(screensaverRotate, ROTATION_MS);
+            });
+        }, "screensaver-decode").start();
+    }
+
+    private void advanceScreensaverImage() {
+        if (screensaverItems.size() < 2) {
+            handler.postDelayed(screensaverRotate, ROTATION_MS);
+            return;
+        }
+        int next = screensaverIndex + 1;
+        if (next >= screensaverItems.size()) {
+            Collections.shuffle(screensaverItems, random);
+            next = 0;
+        }
+        final int nextIndex = next;
+        Item nextItem = screensaverItems.get(nextIndex);
+        DisplayMetrics dm = context.getResources().getDisplayMetrics();
+        int w = dm.widthPixels, h = dm.heightPixels;
+        int gen = ++itemGeneration;
+
+        new Thread(() -> {
+            Bitmap bmp = decode(nextItem.file, w, h);
+            if (bmp == null) {
+                handler.postDelayed(screensaverRotate, ROTATION_MS);
+                return;
+            }
+            handler.post(() -> {
+                if (gen != itemGeneration) {
+                    bmp.recycle();
+                    return;
+                }
+                nextBmp = bmp;
+                ambientNext.setImageBitmap(nextBmp);
+                ambientNext.setAlpha(0f);
+                ambientNext.animate().alpha(1f).setDuration(1400).withEndAction(() -> {
+                    ambient.setImageBitmap(nextBmp);
+                    ambient.setAlpha(1f);
+                    if (currentBmp != null && !currentBmp.isRecycled()) {
+                        currentBmp.recycle();
+                    }
+                    currentBmp = nextBmp;
+                    nextBmp = null;
+                    ambientNext.setImageDrawable(null);
+                    ambientNext.setAlpha(0f);
+                    screensaverIndex = nextIndex;
+                    updateWeatherText();
+                    handler.removeCallbacks(screensaverRotate);
+                    handler.postDelayed(screensaverRotate, ROTATION_MS);
+                }).start();
+
+                if (bottomRight != null) {
+                    bottomRight.animate().alpha(0f).setDuration(400).withEndAction(() -> {
+                        if (artworkTitle != null) artworkTitle.setText(nextItem.title);
+                        if (artworkSubtitle != null) artworkSubtitle.setText(nextItem.subtitle);
+                        bottomRight.animate().alpha(1f).setDuration(800).start();
+                    }).start();
+                }
+            });
+        }, "screensaver-decode").start();
+    }
+
+    void stop() {
+        handler.removeCallbacksAndMessages(null);
+        clockRefresh.stop();
+        content.animate().cancel();
+        ambient.animate().cancel();
+        ambientNext.animate().cancel();
+        if (bottomRight != null) bottomRight.animate().cancel();
+        wallpaperGeneration++;
+        itemGeneration++;
+
+        if (currentBmp != null && !currentBmp.isRecycled()) {
+            currentBmp.recycle();
+            currentBmp = null;
+        }
+        if (nextBmp != null && !nextBmp.isRecycled()) {
+            nextBmp.recycle();
+            nextBmp = null;
+        }
+        ambient.setImageDrawable(null);
+        ambientNext.setImageDrawable(null);
+    }
+
     void useHomeWallpaper(Context ctx) {
+        String mode = ctx.getSharedPreferences(Config.SETTINGS_NAME, Context.MODE_PRIVATE)
+                .getString("screensaver_mode", "nature");
+        if (!"clock".equals(mode)) return;
+
         Config cfg;
         try {
             cfg = Config.load(ctx);
@@ -122,27 +363,20 @@ final class ClockScene {
             return;
         }
         if (!cfg.clockWallpaper) {
-            // clock_glow false: plain black behind the clock (OLED); the clock itself still moves every minute.
             if (!cfg.clockGlow) {
-                wallpaperShown = true;   // also stops the glow's colour cycle
+                wallpaperShown = true;
                 ambient.setBackground(null);
             }
             return;
         }
-        // What Home plays, and Config puts the single wallpaper in it when a theme has no collection.
-        // Reading cfg.wallpaper first held the screensaver on wallpaper.jpg while Home rotated.
         if (cfg.wallpapers.isEmpty()) {
             wallpaperFile = null;
         } else {
-            // Start on the picture Home is showing. WallpaperPlayer records it under the same
-            // preferences and the screensaver runs in the same process, so this is just a read.
             rotation = new ArrayList<>(cfg.wallpapers);
             String shown = ctx.getSharedPreferences("wallpaper_rotation", Context.MODE_PRIVATE)
                     .getString("image", "");
             File current = WallpaperRotation.find(rotation, shown);
             wallpaperFile = current != null ? current : rotation.get(0);
-            // Home only rotates while it is visible, so the screensaver carries the rotation on
-            // itself; without this it holds one picture for as long as it is up.
             rotationMs = cfg.wallpaperRotationMinutes * 60_000L;
             order = cfg.wallpaperOrder;
             moods = cfg.wallpaperMoods;
@@ -165,12 +399,10 @@ final class ClockScene {
             if (bmp == null) return;
             handler.post(() -> {
                 if (generation != wallpaperGeneration || wallpaperShown) {
-                    bmp.recycle();   // stopped meanwhile (or already shown): this picture was never attached
+                    bmp.recycle();
                     return;
                 }
                 wallpaperShown = true;
-                // As the image, not the background: a background is stretched to the view, so a picture of
-                // another shape than the screen would be distorted. centerCrop scales and crops it like Home.
                 ambient.setBackground(null);
                 ambient.setImageDrawable(new LayerDrawable(new Drawable[]{
                         new BitmapDrawable(res, bmp), new ColorDrawable(shade)}));
@@ -178,7 +410,6 @@ final class ClockScene {
         }, "clock-wallpaper").start();
     }
 
-    /** WallpaperPlayer's decode: sampled and scaled down to cover the screen, never bigger than 4K. */
     private static Bitmap decode(File file, int screenW, int screenH) {
         try {
             BitmapFactory.Options options = new BitmapFactory.Options();
@@ -203,22 +434,18 @@ final class ClockScene {
         }
     }
 
-    /** Step to the next picture once its turn is up; the tick already runs every minute. */
     private void advanceWallpaper() {
         if (rotation == null || rotationMs <= 0 || rotation.size() < 2) return;
         shownMs += MOVE_MS;
         if (shownMs < rotationMs) return;
         shownMs = 0;
-        // The same pick as Home's, so a shuffled collection stays shuffled and wallpaper_moods still
-        // decides what may show at this hour.
         File next = WallpaperRotation.pick(playable(), wallpaperFile.getName(), order, random);
-        if (next.equals(wallpaperFile)) return;   // a mood group of one
+        if (next.equals(wallpaperFile)) return;
         wallpaperFile = next;
         wallpaperShown = false;
         loadWallpaper();
     }
 
-    /** WallpaperPlayer's filter: the pictures wallpaper_moods allows at this hour, or all of them. */
     private List<File> playable() {
         if (moods.isEmpty()) return rotation;
         LocalDateTime now = LocalDateTime.now();
@@ -234,7 +461,6 @@ final class ClockScene {
         }).start();
     }
 
-    /** A random spot that keeps the whole clock on screen, with the glow centred behind it. */
     private void placeClock() {
         View parent = (View) content.getParent();
         int maxX = Math.max(0, parent.getWidth() - content.getWidth());

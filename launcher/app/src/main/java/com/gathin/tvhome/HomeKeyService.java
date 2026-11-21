@@ -17,14 +17,20 @@ import android.os.SystemClock;
 import android.os.UserManager;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
+import android.graphics.PixelFormat;
 import android.provider.Settings;
 import android.view.KeyEvent;
+import android.view.View;
 import android.view.ViewConfiguration;
+import android.view.WindowManager;
 import android.view.accessibility.AccessibilityEvent;
+import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.accessibility.AccessibilityWindowInfo;
 import android.widget.Toast;
 
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -93,10 +99,40 @@ public class HomeKeyService extends AccessibilityService {
     /** The bound helper, so the opt-in broadcast can arm it without waiting for a new connection. */
     private static HomeKeyService running;
 
+    public static final int POWER_ACTION_NONE = 0;
+    public static final int POWER_ACTION_SHUTDOWN = 1;
+    public static final int POWER_ACTION_REBOOT = 2;
+    private static int pendingPowerAction = POWER_ACTION_NONE;
+    private static long pendingPowerActionTime = 0;
+    private static boolean firstStepClicked = false;
+    private static long lastStepActionTime = 0;
+    private final Handler powerDialogHandler = new Handler(Looper.getMainLooper());
+    private View blackOverlay;
+    private WindowManager windowManager;
+
+    private final Handler homeHoldHandler = new Handler(Looper.getMainLooper());
+    private boolean homeHoldTriggered = false;
+    private final Runnable openPowerMenuTask = () -> {
+        homeHoldTriggered = true;
+        Intent intent = new Intent(this, PowerMenuActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_MULTIPLE_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION);
+        try {
+            startActivity(intent);
+        } catch (Exception ignored) {}
+    };
+
     @Override
     protected void onServiceConnected() {
         super.onServiceConnected();
         running = this;
+        AccessibilityServiceInfo info = getServiceInfo();
+        if (info != null) {
+            info.flags |= AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS
+                    | AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS;
+            info.eventTypes |= AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+                    | AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED;
+            setServiceInfo(info);
+        }
         settingsScancodes = getResources().getIntArray(R.array.settings_key_scancodes);
         // The service is directBootAware: Android 11 skips a service that is not while the user is still
         // locked at boot, writes accessibility_enabled=0 and, on TCL G03 firmware, never binds it after the
@@ -138,6 +174,7 @@ public class HomeKeyService extends AccessibilityService {
     @Override
     public void onDestroy() {
         if (running == this) running = null;
+        hideBlackOverlay();
         RemoteKeys.release(this);
         stopWaitingForUnlock();
         if (screenOnReceiver != null) unregisterReceiver(screenOnReceiver);
@@ -223,8 +260,11 @@ public class HomeKeyService extends AccessibilityService {
         }
         // home_key_service.xml subscribes to no events, so the redirects ask for window changes only when one is on.
         AccessibilityServiceInfo info = getServiceInfo();
-        if (info != null && (!stockHome.isEmpty() || !powerOnLiveTv.isEmpty() || watchFront)) {
-            info.eventTypes |= AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED;
+        if (info != null) {
+            info.flags |= AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS
+                    | AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS;
+            info.eventTypes |= AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+                    | AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED;
             setServiceInfo(info);
         }
         if (!stockHome.isEmpty() || !powerOnLiveTv.isEmpty()) probeAtBoot();
@@ -254,9 +294,15 @@ public class HomeKeyService extends AccessibilityService {
 
     @Override
     protected boolean onKeyEvent(KeyEvent event) {
+        int keyCode = event.getKeyCode();
+        if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN
+                || keyCode == KeyEvent.KEYCODE_VOLUME_MUTE) {
+            return false;
+        }
+
         // power_on_home: the first key after power-on hands the TV to the user (power and wake keys don't count).
         if (powerOnUntil != 0 && event.getAction() == KeyEvent.ACTION_DOWN
-                && event.getKeyCode() != KeyEvent.KEYCODE_POWER && event.getKeyCode() != KeyEvent.KEYCODE_WAKEUP) {
+                && keyCode != KeyEvent.KEYCODE_POWER && keyCode != KeyEvent.KEYCODE_WAKEUP) {
             powerOnUntil = 0;
         }
         if (consumeVolumeKeys && VolumeKeys.handle(this, event)) return true;
@@ -276,25 +322,40 @@ public class HomeKeyService extends AccessibilityService {
             }
             return true;
         }
-        if (RemoteKeys.handle(this, event, inFront(appKeys, frontAppKeys, event.getKeyCode()),
-                holdAppKeys.get(event.getKeyCode()))) return true;
-        // home_long_press_home: Android never sees the Home key, so a held press cannot turn into ALL_APPS.
-        if (homeLongPressHome && event.getKeyCode() == KeyEvent.KEYCODE_HOME) {
-            if (event.getAction() == KeyEvent.ACTION_UP && !event.isCanceled()) openHome();
+        if (RemoteKeys.handle(this, event, inFront(appKeys, frontAppKeys, keyCode),
+                holdAppKeys.get(keyCode))) return true;
+
+        boolean isHome = (keyCode == KeyEvent.KEYCODE_HOME || keyCode == KeyEvent.KEYCODE_ALL_APPS);
+        if (isHome) {
+            if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                if (event.getRepeatCount() == 0) {
+                    homeHoldTriggered = false;
+                    homeHoldHandler.removeCallbacks(openPowerMenuTask);
+                    homeHoldHandler.postDelayed(openPowerMenuTask, 2800);
+                }
+                return true;
+            } else if (event.getAction() == KeyEvent.ACTION_UP) {
+                homeHoldHandler.removeCallbacks(openPowerMenuTask);
+                if (homeHoldTriggered) {
+                    homeHoldTriggered = false;
+                    return true;
+                }
+                if (!event.isCanceled()) {
+                    openHome();
+                }
+                return true;
+            }
             return true;
         }
-        if (event.getKeyCode() == KeyEvent.KEYCODE_HOME && !stockHome.isEmpty()) {
-            redirectHomeKey(event);
-            return false;
-        }
-        if (event.getKeyCode() != KeyEvent.KEYCODE_ALL_APPS) return false;
-        if (event.getAction() == KeyEvent.ACTION_UP && !event.isCanceled()) openHome();
-        return true;
+        return false;
     }
 
     /** Unbound by Android: the user turned the helper off, so Home doesn't put it back (ServiceRepair). */
     @Override
     public boolean onUnbind(Intent intent) {
+        homeHoldHandler.removeCallbacks(openPowerMenuTask);
+        powerDialogHandler.removeCallbacksAndMessages(null);
+        hideBlackOverlay();
         RemoteKeys.release(this);
         if (repairRecord && !steppingOut) ServiceRepair.disconnected(this, getClass());
         return super.onUnbind(intent);
@@ -302,6 +363,9 @@ public class HomeKeyService extends AccessibilityService {
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
+        if (pendingPowerAction != POWER_ACTION_NONE) {
+            handlePowerActionTick();
+        }
         if (event.getEventType() != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return;
         // app_keys "front:" entries: only activities count, so a toast or the volume bar doesn't change the app in front.
         if ((!frontAppKeys.isEmpty() || !frontAppScancodes.isEmpty())
@@ -365,6 +429,292 @@ public class HomeKeyService extends AccessibilityService {
     static void openPowerMenu() {
         HomeKeyService service = running;
         if (service != null) service.performGlobalAction(GLOBAL_ACTION_POWER_DIALOG);
+    }
+
+    private void showBlackOverlay() {
+        if (blackOverlay != null) return;
+        try {
+            windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
+            blackOverlay = new View(this);
+            blackOverlay.setBackgroundColor(0xFF000000);
+            WindowManager.LayoutParams params = new WindowManager.LayoutParams(
+                    WindowManager.LayoutParams.MATCH_PARENT,
+                    WindowManager.LayoutParams.MATCH_PARENT,
+                    WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                            | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                            | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                            | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                    PixelFormat.OPAQUE);
+            windowManager.addView(blackOverlay, params);
+        } catch (Exception ignored) {}
+    }
+
+    private void hideBlackOverlay() {
+        if (blackOverlay != null && windowManager != null) {
+            try {
+                windowManager.removeView(blackOverlay);
+            } catch (Exception ignored) {}
+            blackOverlay = null;
+        }
+    }
+
+    static void executePowerAction(int action) {
+        HomeKeyService service = running;
+        if (service == null) return;
+        pendingPowerAction = action;
+        pendingPowerActionTime = SystemClock.uptimeMillis();
+        firstStepClicked = false;
+        lastStepActionTime = 0;
+        service.showBlackOverlay();
+
+        if (action == POWER_ACTION_SHUTDOWN) {
+            service.performGlobalAction(GLOBAL_ACTION_POWER_DIALOG);
+        } else if (action == POWER_ACTION_REBOOT) {
+            Intent intent = new Intent(Settings.ACTION_SETTINGS)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            try {
+                service.startActivity(intent);
+            } catch (Exception e) {
+                try {
+                    service.startActivity(new Intent()
+                            .setComponent(new ComponentName("com.android.tv.settings", "com.android.tv.settings.MainSettings"))
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP));
+                } catch (Exception ignored) {}
+            }
+        }
+        service.schedulePowerDialogHandler();
+    }
+
+    private void schedulePowerDialogHandler() {
+        powerDialogHandler.removeCallbacksAndMessages(null);
+        for (int delay = 20; delay <= 6000; delay += 40) {
+            powerDialogHandler.postDelayed(this::handlePowerActionTick, delay);
+        }
+    }
+
+    private void handlePowerActionTick() {
+        if (pendingPowerAction == POWER_ACTION_NONE) return;
+        long now = SystemClock.uptimeMillis();
+        if (now - pendingPowerActionTime > 7000) {
+            boolean wasReboot = (pendingPowerAction == POWER_ACTION_REBOOT);
+            pendingPowerAction = POWER_ACTION_NONE;
+            firstStepClicked = false;
+            hideBlackOverlay();
+            if (wasReboot) {
+                try {
+                    performGlobalAction(GLOBAL_ACTION_BACK);
+                } catch (Exception ignored) {}
+            }
+            return;
+        }
+
+        if (pendingPowerAction == POWER_ACTION_SHUTDOWN) {
+            handleShutdownTick();
+        } else if (pendingPowerAction == POWER_ACTION_REBOOT) {
+            handleRebootTick(now);
+        }
+    }
+
+    private void handleShutdownTick() {
+        AccessibilityNodeInfo acceptNode = findTargetNodeExact("Aceptar");
+        if (acceptNode == null) acceptNode = findTargetNodeExact("OK");
+        if (acceptNode == null) acceptNode = findTargetNodeById("android:id/button1");
+
+        if (acceptNode != null) {
+            try {
+                if (clickTarget(acceptNode)) {
+                    pendingPowerAction = POWER_ACTION_NONE;
+                }
+            } finally {
+                acceptNode.recycle();
+            }
+        }
+    }
+
+    private void handleRebootTick(long now) {
+        // 1. Check if we reached the final confirmation screen: "¿Reiniciar ahora?" or "Restart now?"
+        AccessibilityNodeInfo confirmTitle = findTargetNodeContains("¿Reiniciar ahora?");
+        if (confirmTitle == null) confirmTitle = findTargetNodeContains("Restart now?");
+        if (confirmTitle == null) confirmTitle = findTargetNodeContains("¿Desea reiniciar?");
+        if (confirmTitle != null) {
+            confirmTitle.recycle();
+            AccessibilityNodeInfo confirmBtn = findTargetNodeExact("Reiniciar");
+            if (confirmBtn == null) confirmBtn = findTargetNodeExact("Restart");
+            if (confirmBtn != null) {
+                try {
+                    if (clickTarget(confirmBtn)) {
+                        pendingPowerAction = POWER_ACTION_NONE;
+                        return;
+                    }
+                } finally {
+                    confirmBtn.recycle();
+                }
+            }
+            return;
+        }
+
+        // 2. Check if "Reiniciar" / "Restart" list item is visible in the current window
+        AccessibilityNodeInfo rebootItem = findTargetNodeExact("Reiniciar");
+        if (rebootItem == null) rebootItem = findTargetNodeExact("Restart");
+        if (rebootItem != null) {
+            try {
+                if (clickTarget(rebootItem)) {
+                    lastStepActionTime = now;
+                    return;
+                }
+            } finally {
+                rebootItem.recycle();
+            }
+        }
+
+        // 3. Check if "Preferencias del dispositivo" or "Device Preferences" is visible in MainSettings
+        AccessibilityNodeInfo prefNode = findTargetNodeExact("Preferencias del dispositivo");
+        if (prefNode == null) prefNode = findTargetNodeExact("Device Preferences");
+        if (prefNode != null) {
+            AccessibilityNodeInfo decorTitle = findTargetNodeById("com.android.tv.settings:id/decor_title");
+            boolean isSubpage = false;
+            if (decorTitle != null) {
+                CharSequence dt = decorTitle.getText();
+                if (dt != null && (dt.toString().contains("Preferencias") || dt.toString().contains("Device Preferences"))) {
+                    isSubpage = true;
+                }
+                decorTitle.recycle();
+            }
+
+            if (!isSubpage) {
+                if (now - lastStepActionTime > 250) {
+                    try {
+                        if (clickTarget(prefNode)) {
+                            lastStepActionTime = now;
+                            return;
+                        }
+                    } finally {
+                        prefNode.recycle();
+                    }
+                }
+            } else {
+                prefNode.recycle();
+            }
+        }
+
+        // 4. If we are inside "Preferencias del dispositivo" and "Reiniciar" is not yet visible, scroll down!
+        if (now - lastStepActionTime > 200) {
+            AccessibilityNodeInfo listNode = findTargetNodeById("com.android.tv.settings:id/list");
+            if (listNode != null) {
+                try {
+                    listNode.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD);
+                    int count = listNode.getChildCount();
+                    if (count > 0) {
+                        AccessibilityNodeInfo lastChild = listNode.getChild(count - 1);
+                        if (lastChild != null) {
+                            try {
+                                lastChild.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
+                            } finally {
+                                lastChild.recycle();
+                            }
+                        }
+                    }
+                } finally {
+                    listNode.recycle();
+                }
+                lastStepActionTime = now;
+            }
+        }
+    }
+
+    private AccessibilityNodeInfo findTargetNodeExact(String text) {
+        AccessibilityNodeInfo root = getRootInActiveWindow();
+        if (root != null) {
+            List<AccessibilityNodeInfo> list = root.findAccessibilityNodeInfosByText(text);
+            if (list != null) {
+                for (AccessibilityNodeInfo node : list) {
+                    CharSequence t = node.getText();
+                    if (t != null && t.toString().trim().equalsIgnoreCase(text)) {
+                        return node;
+                    }
+                }
+            }
+        }
+        List<AccessibilityWindowInfo> windows = getWindows();
+        if (windows != null) {
+            for (AccessibilityWindowInfo window : windows) {
+                AccessibilityNodeInfo wRoot = window.getRoot();
+                if (wRoot != null) {
+                    List<AccessibilityNodeInfo> list = wRoot.findAccessibilityNodeInfosByText(text);
+                    if (list != null) {
+                        for (AccessibilityNodeInfo node : list) {
+                            CharSequence t = node.getText();
+                            if (t != null && t.toString().trim().equalsIgnoreCase(text)) {
+                                return node;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    private AccessibilityNodeInfo findTargetNodeContains(String text) {
+        AccessibilityNodeInfo root = getRootInActiveWindow();
+        if (root != null) {
+            List<AccessibilityNodeInfo> list = root.findAccessibilityNodeInfosByText(text);
+            if (list != null && !list.isEmpty()) {
+                return list.get(0);
+            }
+        }
+        List<AccessibilityWindowInfo> windows = getWindows();
+        if (windows != null) {
+            for (AccessibilityWindowInfo window : windows) {
+                AccessibilityNodeInfo wRoot = window.getRoot();
+                if (wRoot != null) {
+                    List<AccessibilityNodeInfo> list = wRoot.findAccessibilityNodeInfosByText(text);
+                    if (list != null && !list.isEmpty()) {
+                        return list.get(0);
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    private AccessibilityNodeInfo findTargetNodeById(String viewId) {
+        AccessibilityNodeInfo root = getRootInActiveWindow();
+        if (root != null) {
+            List<AccessibilityNodeInfo> list = root.findAccessibilityNodeInfosByViewId(viewId);
+            if (list != null && !list.isEmpty()) {
+                return list.get(0);
+            }
+        }
+        List<AccessibilityWindowInfo> windows = getWindows();
+        if (windows != null) {
+            for (AccessibilityWindowInfo window : windows) {
+                AccessibilityNodeInfo wRoot = window.getRoot();
+                if (wRoot != null) {
+                    List<AccessibilityNodeInfo> list = wRoot.findAccessibilityNodeInfosByViewId(viewId);
+                    if (list != null && !list.isEmpty()) {
+                        return list.get(0);
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    private boolean clickTarget(AccessibilityNodeInfo node) {
+        if (node == null) return false;
+        AccessibilityNodeInfo current = node;
+        while (current != null) {
+            if (current.isClickable() && current.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                if (current != node) current.recycle();
+                return true;
+            }
+            AccessibilityNodeInfo parent = current.getParent();
+            if (current != node) current.recycle();
+            current = parent;
+        }
+        return false;
     }
 
     static boolean powerOnRedirect(String liveTv, CharSequence pkg, long now, long armedUntil) {

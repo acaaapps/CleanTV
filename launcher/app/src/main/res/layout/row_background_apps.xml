@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/bgAppsContainer"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:paddingTop="28dp"
+    android:paddingBottom="48dp"
+    android:clipChildren="false"
+    android:clipToPadding="false">
+
+    <TextView
+        android:id="@+id/bgAppsTitle"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/recents"
+        android:textColor="#99FFFFFF"
+        android:textSize="13sp"
+        android:fontFamily="@string/font_medium"
+        android:letterSpacing="0.08"
+        android:textAllCaps="true" />
+
+    <LinearLayout
+        android:id="@+id/bgAppsCards"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:orientation="horizontal"
+        android:clipChildren="false"
+        android:clipToPadding="false" />
+</LinearLayout>

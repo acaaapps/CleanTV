@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#FF101419"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingStart="72dp"
+        android:paddingEnd="72dp"
+        android:paddingTop="38dp"
+        android:paddingBottom="38dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/screensaver_mode_label"
+            android:textColor="#FFFFFFFF"
+            android:textSize="34sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="28dp"
+            android:text="Modo de imagen"
+            android:textColor="#FFFFFFFF"
+            android:textSize="20sp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:orientation="horizontal">
+
+            <TextView android:id="@+id/modeNature" style="@style/SettingsColumnChoice" android:text="@string/screensaver_nature" />
+            <TextView android:id="@+id/modeArt" style="@style/SettingsColumnChoice" android:text="@string/screensaver_art" />
+            <TextView android:id="@+id/modeMix" style="@style/SettingsColumnChoice" android:text="Mezcla" />
+            <TextView android:id="@+id/modeClock" style="@style/SettingsColumnChoice" android:text="@string/screensaver_clock" />
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="28dp"
+            android:text="@string/screensaver_timeout_label"
+            android:textColor="#FFFFFFFF"
+            android:textSize="20sp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:orientation="horizontal">
+
+            <TextView android:id="@+id/screensaverStartNow" style="@style/SettingsColumnChoice" android:text="@string/screensaver_start_now" />
+            <TextView android:id="@+id/interval30s" style="@style/SettingsColumnChoice" android:text="@string/screensaver_timeout_30s" />
+            <TextView android:id="@+id/interval1m" style="@style/SettingsColumnChoice" android:text="@string/screensaver_timeout_1m" />
+            <TextView android:id="@+id/interval5m" style="@style/SettingsColumnChoice" android:text="@string/screensaver_timeout_5m" />
+        </LinearLayout>
+    </LinearLayout>
+</ScrollView>

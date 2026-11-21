@@ -175,10 +175,9 @@
 
             <LinearLayout
                 android:id="@+id/leftBlock"
-                android:layout_width="match_parent"
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_alignParentStart="true"
-                android:layout_toStartOf="@+id/topButtons"
                 android:layout_marginEnd="16dp"
                 android:orientation="vertical">
 
@@ -300,6 +299,39 @@
                     </LinearLayout>
                 </LinearLayout>
 
+                <LinearLayout
+                    android:id="@+id/weatherBlock"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:layout_marginStart="4dp"
+                    android:orientation="vertical"
+                    android:visibility="gone">
+
+                    <TextView
+                        android:id="@+id/weatherNow"
+                        android:gravity="left"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:textColor="#E6FFFFFF"
+                        android:textSize="15sp"
+                        android:fontFamily="@string/font_medium"
+                        android:letterSpacing="0.04"
+                        android:singleLine="true" />
+
+                    <TextView
+                        android:id="@+id/weatherForecast"
+                        android:gravity="left"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="3dp"
+                        android:textColor="#99FFFFFF"
+                        android:textSize="12sp"
+                        android:fontFamily="@string/font_regular"
+                        android:letterSpacing="0.06"
+                        android:singleLine="true" />
+                </LinearLayout>
+
             </LinearLayout>
 
             <!-- Shown only when show_stats is on. Outside leftBlock, so the top buttons stay level with the clock
@@ -326,8 +358,9 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_alignParentEnd="true"
-                android:layout_alignBottom="@id/leftBlock"
-                android:layout_marginBottom="6dp"
+                android:layout_alignParentRight="true"
+                android:layout_alignParentTop="true"
+                android:layout_marginTop="110dp"
                 android:clipChildren="false"
                 android:clipToPadding="false"
                 android:orientation="horizontal">
@@ -378,6 +411,71 @@
                     android:text="@string/settings"
                     android:drawableStart="@drawable/ic_settings"
                     android:nextFocusDown="@+id/grid" />
+
+                <TextView
+                    android:id="@+id/btnPower"
+                    style="@style/TopButtonIcon"
+                    android:contentDescription="@string/power_menu"
+                    android:drawableStart="@drawable/ic_power"
+                    android:nextFocusDown="@+id/grid" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/quoteContainer"
+                android:layout_width="450dp"
+                android:layout_height="wrap_content"
+                android:layout_alignParentEnd="true"
+                android:layout_alignParentRight="true"
+                android:layout_alignParentTop="true"
+                android:layout_marginEnd="0dp"
+                android:layout_marginRight="0dp"
+                android:orientation="horizontal"
+                android:gravity="top|end|right"
+                android:visibility="gone">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_weight="1"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:gravity="end|right">
+
+                    <TextView
+                        android:id="@+id/quoteText"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="end|right"
+                        android:textAlignment="viewEnd"
+                        android:maxLines="5"
+                        android:ellipsize="end"
+                        android:textColor="#E6FFFFFF"
+                        android:textSize="13sp"
+                        android:lineSpacingExtra="2dp"
+                        android:fontFamily="@string/font_regular" />
+
+                    <TextView
+                        android:id="@+id/quoteAuthor"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="end|right"
+                        android:textAlignment="viewEnd"
+                        android:layout_marginTop="3dp"
+                        android:singleLine="true"
+                        android:ellipsize="end"
+                        android:textColor="#99FFFFFF"
+                        android:textSize="11sp"
+                        android:fontFamily="@string/font_medium" />
+                </LinearLayout>
+
+                <!-- Vertical line accent for poetry (on the RIGHT side, hidden for normal quotes) -->
+                <View
+                    android:id="@+id/quoteAccentLine"
+                    android:layout_width="2dp"
+                    android:layout_height="match_parent"
+                    android:layout_marginStart="10dp"
+                    android:layout_marginLeft="10dp"
+                    android:background="#80FFFFFF"
+                    android:visibility="gone" />
             </LinearLayout>
         </RelativeLayout>
 

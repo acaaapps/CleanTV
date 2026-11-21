@@ -28,6 +28,7 @@ import android.view.animation.DecelerateInterpolator;
 import android.view.animation.OvershootInterpolator;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -63,6 +64,10 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         void onLibraryUp();
         /** A tile whose launch_actions entry is "input:<id>": switch to that TV input instead of opening an app. */
         void onOpenInput(String inputId);
+        void onBackgroundAppClick(Entry entry);
+        void onBackgroundAppLongClick(Entry entry, View card);
+        void onBackgroundAppFocused(Entry entry, View card);
+        void onBackgroundAppUp(int column);
     }
 
     static final class Entry {
@@ -221,6 +226,8 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     /** Packages drawn from their icon and name even when they have a banner (config.xml icon_tiles). */
     private final Set<String> iconTiles;
     private final List<Entry> items = new ArrayList<>();
+    private final List<Entry> backgroundApps = new ArrayList<>();
+    private int cachedInner, cachedW, cachedH, cachedColW;
 
     AppAdapter(Context ctx, TileListener listener, int dockSize, Config cfg) {
         this.ctx = ctx;
@@ -398,6 +405,10 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     @NonNull
     @Override
     public RecyclerView.ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+        if (viewType == 2) {
+            View row = LayoutInflater.from(ctx).inflate(R.layout.row_background_apps, parent, false);
+            return new BackgroundAppsHolder(row);
+        }
         if (viewType == 1) {
             View row = LayoutInflater.from(ctx).inflate(R.layout.row_app_library, parent, false);
             View button = row.findViewById(R.id.btnLibrary);
@@ -416,6 +427,10 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         int width = parent.getWidth() > 0 ? parent.getWidth() : parent.getMeasuredWidth();
         int inner = width - parent.getPaddingLeft() - parent.getPaddingRight();
         int w = tileWidthPx(inner, parent.getHeight(), dockSize, rowsBelowDock, dockTitle, dockRow, density), h = tileHeightPx(w);
+        cachedInner = inner;
+        cachedW = w;
+        cachedH = h;
+        cachedColW = inner / dockSize;
         View card = v.findViewById(R.id.card);
         ViewGroup.LayoutParams cardLp = card.getLayoutParams();
         cardLp.width = w;
@@ -458,6 +473,12 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     @Override
     @SuppressWarnings("deprecation")
     public void onBindViewHolder(@NonNull RecyclerView.ViewHolder holder, int position) {
+        if (isBackgroundAppsAt(position)) {
+            BackgroundAppsHolder bh = (BackgroundAppsHolder) holder;
+            float density = ctx.getResources().getDisplayMetrics().density;
+            bh.bind(backgroundApps, listener, cachedColW, cachedW, cachedH, density);
+            return;
+        }
         if (isLibraryAt(position)) return;
         Holder h = (Holder) holder;
         Entry e = items.get(position);
@@ -527,7 +548,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
     /** Opens the tile's activity by explicit component, with no extras: a card can name nothing else. */
     @SuppressWarnings("deprecation")
-    private void launch(Entry e) {
+    void launch(Entry e) {
         if (e.kind == Entry.HOME_SETTINGS) {
             ctx.startActivity(new Intent(ctx, HomeSettingsActivity.class)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
@@ -553,7 +574,8 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         }
         try {
             ctx.startActivity(i);
-            if (cinematic) LastOpened.record(ctx, e.pkg);
+            LastOpened.record(ctx, e.pkg);
+            RecentsManager.onAppOpened(ctx, e.pkg);
             if (advancedEffects && !reducedMotion && ctx instanceof Activity) {
                 ((Activity) ctx).overridePendingTransition(R.anim.app_open_enter, R.anim.app_open_exit);
             }
@@ -562,25 +584,55 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         }
     }
 
+    void setBackgroundApps(List<Entry> apps) {
+        backgroundApps.clear();
+        if (apps != null) backgroundApps.addAll(apps);
+        notifyDataSetChanged();
+    }
+
+    boolean hasBackgroundApps() {
+        return !backgroundApps.isEmpty();
+    }
+
+    boolean isBackgroundAppsAt(int position) {
+        return hasBackgroundApps() && position == items.size();
+    }
+
+    boolean isLibraryAt(int position) {
+        int target = items.size() + (hasBackgroundApps() ? 1 : 0);
+        return showLibrary && position == target;
+    }
+
     @Override
     public int getItemCount() {
-        return items.size() + (showLibrary ? 1 : 0);
+        return items.size() + (hasBackgroundApps() ? 1 : 0) + (showLibrary ? 1 : 0);
     }
 
     int appCount() { return items.size(); }
 
-    boolean isLibraryAt(int position) { return showLibrary && position == items.size(); }
-
-    @Override public int getItemViewType(int position) { return isLibraryAt(position) ? 1 : 0; }
+    @Override
+    public int getItemViewType(int position) {
+        if (isBackgroundAppsAt(position)) return 2;
+        if (isLibraryAt(position)) return 1;
+        return 0;
+    }
 
     boolean containsPackage(String pkg) {
         for (Entry entry : items) if (entry.pkg.equals(pkg)) return true;
         return false;
     }
 
+    Entry findEntry(String pkg) {
+        if (pkg == null) return null;
+        for (Entry entry : items) if (entry != null && pkg.equals(entry.pkg)) return entry;
+        return null;
+    }
+
     @Override
     public long getItemId(int position) {
-        return isLibraryAt(position) ? Long.MIN_VALUE : items.get(position).component.flattenToShortString().hashCode();
+        if (isBackgroundAppsAt(position)) return Long.MIN_VALUE + 1;
+        if (isLibraryAt(position)) return Long.MIN_VALUE;
+        return items.get(position).component.flattenToShortString().hashCode();
     }
 
     /** Uses this saved order and dock size from the next reload() (Order.ranks, Order.docked). */
@@ -999,6 +1051,119 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                     listener.onTileFocused(pos, view);
                 }
             });
+        }
+    }
+
+    static class BackgroundAppsHolder extends RecyclerView.ViewHolder {
+        final TextView title;
+        final LinearLayout cardsContainer;
+
+        BackgroundAppsHolder(View itemView) {
+            super(itemView);
+            title = itemView.findViewById(R.id.bgAppsTitle);
+            cardsContainer = itemView.findViewById(R.id.bgAppsCards);
+        }
+
+        View getCard(int column) {
+            int idx = Math.max(0, Math.min(column, cardsContainer.getChildCount() - 1));
+            if (idx >= 0 && idx < cardsContainer.getChildCount()) {
+                View item = cardsContainer.getChildAt(idx);
+                return item != null ? item.findViewById(R.id.card) : null;
+            }
+            return null;
+        }
+
+        void bind(List<Entry> apps, TileListener listener, int columnWidth, int cardWidth, int cardHeight, float density) {
+            if (columnWidth <= 0 || cardWidth <= 0) {
+                float d = density > 0 ? density : 2f;
+                cardWidth = Math.round(180f * d);
+                cardHeight = Math.round(101f * d);
+                columnWidth = Math.round(cardWidth + 24f * d);
+            }
+            int cardLeftInCol = Math.max(0, (columnWidth - cardWidth) / 2);
+            title.setPadding(cardLeftInCol, 0, 0, 0);
+
+            cardsContainer.removeAllViews();
+            LayoutInflater inflater = LayoutInflater.from(itemView.getContext());
+
+            for (int i = 0; i < apps.size(); i++) {
+                final int index = i;
+                final Entry e = apps.get(i);
+
+                View item = inflater.inflate(R.layout.item_recents_app, cardsContainer, false);
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(columnWidth, ViewGroup.LayoutParams.WRAP_CONTENT);
+                item.setLayoutParams(lp);
+
+                View card = item.findViewById(R.id.card);
+                card.setTag(e);
+                ViewGroup.LayoutParams cardLp = card.getLayoutParams();
+                cardLp.width = cardWidth;
+                cardLp.height = cardHeight;
+                card.setLayoutParams(cardLp);
+                card.setClipToOutline(true);
+
+                ImageView banner = item.findViewById(R.id.banner);
+                ImageView icon = item.findViewById(R.id.icon);
+                TextView label = item.findViewById(R.id.label);
+                TextView name = item.findViewById(R.id.name);
+
+                ViewGroup.MarginLayoutParams nameLp = (ViewGroup.MarginLayoutParams) name.getLayoutParams();
+                nameLp.width = cardWidth;
+                nameLp.topMargin = cardHeight + Math.round(4 * density);
+                name.setLayoutParams(nameLp);
+                name.setText(e.label);
+
+                if (e.banner != null) {
+                    banner.setImageDrawable(e.banner);
+                    banner.setVisibility(View.VISIBLE);
+                    icon.setVisibility(View.GONE);
+                    label.setVisibility(View.GONE);
+                } else {
+                    banner.setVisibility(View.GONE);
+                    icon.setImageDrawable(e.icon);
+                    icon.setVisibility(View.VISIBLE);
+                    label.setText(e.label);
+                    label.setVisibility(View.VISIBLE);
+                }
+
+                card.setOnClickListener(v -> {
+                    if (listener != null) listener.onBackgroundAppClick(e);
+                });
+
+                card.setOnLongClickListener(v -> {
+                    if (listener != null) listener.onBackgroundAppLongClick(e, v);
+                    return true;
+                });
+
+                card.setOnFocusChangeListener((v, hasFocus) -> {
+                    name.setAlpha(hasFocus ? 1f : 0f);
+                    v.setScaleX(hasFocus ? 1.08f : 1f);
+                    v.setScaleY(hasFocus ? 1.08f : 1f);
+                    if (hasFocus && listener != null) {
+                        listener.onBackgroundAppFocused(e, v);
+                    }
+                });
+
+                card.setOnKeyListener((v, keyCode, event) -> {
+                    if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
+                    if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+                        if (listener != null) listener.onBackgroundAppUp(index);
+                        return true;
+                    }
+                    if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                        return true;
+                    }
+                    if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+                        if (index == 0) return true;
+                    }
+                    if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                        if (index >= apps.size() - 1) return true;
+                    }
+                    return false;
+                });
+
+                cardsContainer.addView(item);
+            }
         }
     }
 }

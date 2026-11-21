@@ -2,7 +2,9 @@ package com.gathin.tvhome;
 
 import android.animation.ArgbEvaluator;
 import android.animation.ValueAnimator;
+import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.app.ActivityManager;
 import android.app.Dialog;
 import android.content.ActivityNotFoundException;
 import android.content.BroadcastReceiver;
@@ -75,6 +77,7 @@ import androidx.dynamicanimation.animation.FloatPropertyCompat;
 import androidx.dynamicanimation.animation.SpringAnimation;
 import androidx.dynamicanimation.animation.SpringForce;
 import androidx.recyclerview.widget.GridLayoutManager;
+import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import java.io.File;
@@ -196,6 +199,14 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private boolean lunar;
     private int lunarOffset;
     private TextView stats;
+    private WeatherManager weatherManager;
+    private View weatherBlock;
+    private TextView weatherNow, weatherForecast;
+    private QuotesManager quotesManager;
+    private View quoteContainer;
+    private View quoteAccentLine;
+    private TextView quoteText;
+    private TextView quoteAuthor;
     private List<RaceWeekend.Race> raceCalendar;
     private View racePanel;
     private TextView raceKicker, raceHeadline, raceSessions;
@@ -452,6 +463,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private java.util.Map<Integer, String> homeHoldAppKeys = java.util.Collections.emptyMap();
 
     @Override
+    @SuppressLint("InvalidSetHasFixedSize")
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
@@ -481,7 +493,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         festival = cfg.festival;
         festive = festival.active(LocalDate.now());
         liveTvPkg = cfg.liveTvPackage;
-        idleClockMs = cfg.homeIdleClockMinutes * MINUTE_MS;
+        idleClockMs = getScreensaverTimeoutMs();
         backOpensClock = cfg.backOpensClock;
         bootToLiveTv = cfg.bootToLiveTv;
         openOnStartChoice = cfg.openOnStartChoice;
@@ -538,6 +550,16 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         if (!cfg.dockTitle) hero.setVisibility(View.GONE);
         greeting = findViewById(R.id.greeting);
         clockBlock = findViewById(R.id.leftBlock);
+        weatherManager = new WeatherManager(this);
+        weatherBlock = findViewById(R.id.weatherBlock);
+        weatherNow = findViewById(R.id.weatherNow);
+        weatherForecast = findViewById(R.id.weatherForecast);
+        quoteContainer = findViewById(R.id.quoteContainer);
+        quoteAccentLine = findViewById(R.id.quoteAccentLine);
+        quoteText = findViewById(R.id.quoteText);
+        quoteAuthor = findViewById(R.id.quoteAuthor);
+        quotesManager = new QuotesManager(this);
+        quotesManager.bindViews(quoteContainer, quoteAccentLine, quoteText, quoteAuthor);
         clockRefresh = new ClockRefresh(clockBlock);
         greetingColor = greeting.getCurrentTextColor();
         if (!cfg.showGreeting) greeting.setVisibility(View.GONE);
@@ -665,7 +687,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             }
         });
         ((GridLayoutManager) grid.getLayoutManager()).setSpanSizeLookup(new GridLayoutManager.SpanSizeLookup() {
-            @Override public int getSpanSize(int position) { return !singleRow && adapter != null && adapter.isLibraryAt(position) ? COLUMNS : 1; }
+            @Override public int getSpanSize(int position) { return !singleRow && adapter != null && (adapter.isLibraryAt(position) || adapter.isBackgroundAppsAt(position)) ? COLUMNS : 1; }
         });
         grid.setHasFixedSize(true);
         grid.setItemAnimator(null);
@@ -826,11 +848,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             ((TextView) btnSettings).setText(R.string.launcher_settings);
             ((TextView) btnSettings).setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_home_settings_pill, 0, 0, 0);
         }
-        btnSettings.setOnClickListener(v -> {
-            if (launcherSettingsButton) startActivityForResult(
-                    new Intent(this, LauncherSettingsActivity.class), LAUNCHER_SETTINGS_REQUEST);
-            else open(systemIntent(Settings.ACTION_SETTINGS));
-        });
+        btnSettings.setOnClickListener(v -> showSettingsDropdown());
+        View btnPower = findViewById(R.id.btnPower);
+        if (btnPower != null) btnPower.setOnClickListener(v -> showPowerMenu());
         btnReorder = findViewById(R.id.btnReorder);
         btnReorder.setOnClickListener(v -> toggleReorder());
         btnReorder.setVisibility(cfg.reorderButton ? View.VISIBLE : View.GONE);
@@ -902,8 +922,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 return true;
             }
             int firstButton = btnInputs.getVisibility() == View.VISIBLE ? R.id.btnInputs : firstTopButton().getId();
-            int leftButton = rtlMenuBar ? R.id.btnSettings : firstButton;
-            int rightButton = rtlMenuBar ? firstButton : R.id.btnSettings;
+            int lastButton = btnPower != null && btnPower.getVisibility() == View.VISIBLE ? R.id.btnPower : R.id.btnSettings;
+            int leftButton = rtlMenuBar ? lastButton : firstButton;
+            int rightButton = rtlMenuBar ? firstButton : lastButton;
             if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) return v.getId() == leftButton;
             return keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && v.getId() == rightButton;
         };
@@ -911,11 +932,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         btnWifi.setOnKeyListener(pillKeys);
         btnVpn.setOnKeyListener(pillKeys);
         btnSettings.setOnKeyListener(pillKeys);
+        if (btnPower != null) btnPower.setOnKeyListener(pillKeys);
         btnReorder.setOnKeyListener(pillKeys);
         btnLibraryTop.setOnKeyListener(pillKeys);
         for (View button : topAppButtons) button.setOnKeyListener(pillKeys);
         if (advancedEffects) {
             List<View> pills = new ArrayList<>(Arrays.asList(btnInputs, btnWifi, btnVpn, btnReorder, btnLibraryTop, btnSettings));
+            if (btnPower != null) pills.add(btnPower);
             pills.addAll(topAppButtons);
             for (View button : pills) {
                 button.setOnFocusChangeListener((view, focused) -> view.animate()
@@ -1047,6 +1070,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
+        if (intent != null && intent.hasExtra("quote_id") && quotesManager != null) {
+            quotesManager.showSpecific(intent.getStringExtra("quote_id"));
+        }
         if (openLauncherSettingsIfAsked(intent)) return;
         if (openLibraryIfAsked(intent)) return;
         if (openInputsIfAsked(intent)) return;
@@ -1097,6 +1123,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         }
         restartIdleClock();
         promptsPaused = false;
+        if (weatherManager != null) {
+            weatherManager.update(weatherBlock, weatherNow, weatherForecast);
+        }
+        if (quotesManager != null) {
+            quotesManager.start();
+        }
         if (grid.getAdapter() == null) grid.setAdapter(adapter);   // dropped by onTrimMemory
         switch (tileRefresh.onResume(packagesChangedSinceRebuild())) {
             case REBUILD:
@@ -1114,6 +1146,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         if (openLiveTvAfterBoot()) return;
         updateGreeting();
         updatePanel();
+        updateBackgroundApps();
         // Back from an app opened from its tile, focus is still on that tile, so the cinematic "Last opened" line kept
         // the time from before this launch ("2 days ago" right after opening it). Refresh it.
         if (cinematic && heroMeta != null && lastFocused >= 0 && lastFocused < adapter.appCount()) updateHeroMeta(lastFocused);
@@ -1260,6 +1293,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         cards = moduleCards ? CardFeature.run(() -> Cards.discover(this, hiddenApps,
                 () -> Cards.load(Cards.storeFile(this)), leanback), none) : none;
         adapter.reload(cards.isEmpty() ? none : CardFeature.run(() -> Cards.shown(cards), none), leanback);
+        updateBackgroundApps();
         lastFocusedKey = returnKey;
         lastFocused = returnSlot;
         packageSequence = currentPackageSequence(packageSequence);
@@ -1290,8 +1324,17 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         restartIdleClock();
     }
 
+    private long getScreensaverTimeoutMs() {
+        String timeout = getSharedPreferences(Config.SETTINGS_NAME, MODE_PRIVATE)
+                .getString("screensaver_timeout", "1m");
+        if ("30s".equals(timeout)) return 30_000L;
+        if ("5m".equals(timeout)) return 300_000L;
+        return 60_000L;
+    }
+
     private void restartIdleClock() {
         root.removeCallbacks(showIdleClock);
+        idleClockMs = getScreensaverTimeoutMs();
         if (resumed && idleClockMs > 0) root.postDelayed(showIdleClock, idleClockMs);
     }
 
@@ -1317,6 +1360,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         if (gameDay != null) gameDay.stop();
         handler.removeCallbacks(turnTick);
         if (lamp != null) lamp.stop();
+        if (quotesManager != null) quotesManager.stop();
         cancelPendingFocusScroll();
         // Nothing of ours stays on screen over another app; an undecided prompt simply returns next time.
         if (cardPrompt != null) cardPrompt.dismiss();
@@ -1374,6 +1418,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         super.onDestroy();
         RemoteKeys.release(this);
         cancelHoldOk();
+        if (weatherManager != null) weatherManager.destroy();
         if (gameDay != null) gameDay.shutdown();
         unregisterReceiver(packageReceiver);
         if (openOnStartOnWake) unregisterReceiver(wakeReceiver);
@@ -1428,6 +1473,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         if (holdOk(event)) return true;
         if (tileMenuEnabled && !reordering && openPopup == null && cardPrompt == null
                 && event.getKeyCode() == KeyEvent.KEYCODE_MENU) {
+            View f = getCurrentFocus();
+            if (f != null && f.getTag() instanceof AppAdapter.Entry) {
+                if (RemoteKeys.menuReleased(event.getAction(), event.getFlags())) {
+                    onBackgroundAppLongClick((AppAdapter.Entry) f.getTag(), f);
+                }
+                return true;
+            }
             int position = focusedTilePosition();
             if (position >= 0 && position < adapter.appCount()
                     && !getPackageName().equals(adapter.packageAt(position))) {
@@ -1487,7 +1539,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private int focusedTilePosition() {
         View f = getCurrentFocus();
         if (f == null || f.getId() != R.id.card || !(f.getParent() instanceof View)) return -1;
-        return grid.getChildAdapterPosition((View) f.getParent());
+        View parent = (View) f.getParent();
+        if (parent.getParent() != grid) return -1;
+        return grid.getChildAdapterPosition(parent);
     }
 
     /** The reorder button: turns the mode on (focus goes back to the last tile), or off again. */
@@ -2454,6 +2508,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         } else {
             int lastRowStart = ((count - 1) / COLUMNS) * COLUMNS;
             if (position >= lastRowStart) {
+                if (adapter.hasBackgroundApps()) {
+                    int col = position % COLUMNS;
+                    focusBackgroundApp(col);
+                    return true;
+                }
                 if (adapter.isLibraryAt(count)) focusLibrary();
                 return true;
             }
@@ -3034,10 +3093,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         pill.setContentDescription(pill.getText());
         pill.setText(null);
         pill.setMaxWidth(Integer.MAX_VALUE);
-        int pad = Math.round(10 * density);
+        int pad = Math.round(6 * density);
         pill.setPaddingRelative(pad, 0, pad, 0);
         pill.setCompoundDrawablePadding(0);
-        pill.getLayoutParams().width = Math.round(42 * density);
+        pill.getLayoutParams().width = Math.round(34 * density);
     }
 
     // ---- festive skin ------------------------------------------------------------------------------
@@ -3683,6 +3742,21 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         rows.getChildAt(0).requestFocus();
     }
 
+    private void showSettingsDropdown() {
+        View anchor = findViewById(R.id.btnSettings);
+        View panel = getLayoutInflater().inflate(R.layout.popup_inputs, root, false);
+        LinearLayout rows = panel.findViewById(R.id.rows);
+        PopupWindow popup = glassPopup(panel, (int) (220 * density));
+        addInputRow(rows, popup, R.drawable.ic_settings, getString(R.string.tv_settings), -1,
+                () -> open(systemIntent(Settings.ACTION_SETTINGS)));
+        addInputRow(rows, popup, R.drawable.ic_home_settings_pill, getString(R.string.launcher_settings), -1,
+                () -> startActivityForResult(new Intent(this, LauncherSettingsActivity.class), LAUNCHER_SETTINGS_REQUEST));
+        panel.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
+        popup.setWidth(Math.max((int) (220 * density), Math.min(panel.getMeasuredWidth(), (int) (320 * density))));
+        dropIn(popup, panel, anchor, getResources().getBoolean(R.bool.rtl_menu_bar) ? Gravity.START : Gravity.END);
+        rows.getChildAt(0).requestFocus();
+    }
+
     /** The header opens launcher settings directly; hold OK keeps the extra home actions available. */
     private void showSettingsMenu() {
         View anchor = findViewById(R.id.btnSettings);
@@ -3713,6 +3787,62 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         rows.getChildAt(0).requestFocus();
     }
 
+    private void showPowerMenu() {
+        View anchor = findViewById(R.id.btnPower);
+        if (anchor == null) anchor = findViewById(R.id.btnSettings);
+        View panel = getLayoutInflater().inflate(R.layout.popup_inputs, root, false);
+        LinearLayout rows = panel.findViewById(R.id.rows);
+        PopupWindow popup = glassPopup(panel, (int) (200 * density));
+        addPowerMenuRow(rows, popup, R.drawable.ic_power, 0xFFFF4D4D, R.string.power_off, () -> {
+            HomeKeyService.executePowerAction(HomeKeyService.POWER_ACTION_SHUTDOWN);
+        });
+        addPowerMenuRow(rows, popup, R.drawable.ic_restart, 0xFFFFCC00, R.string.reboot, () -> {
+            HomeKeyService.executePowerAction(HomeKeyService.POWER_ACTION_REBOOT);
+        });
+        addPowerMenuRow(rows, popup, R.drawable.ic_picture, 0xFF4CAF50, R.string.screensaver_title, () -> {
+            startActivity(new Intent(this, ClockActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        });
+        panel.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
+        popup.setWidth(Math.max((int) (200 * density), Math.min(panel.getMeasuredWidth(), (int) (300 * density))));
+        dropIn(popup, panel, anchor, getResources().getBoolean(R.bool.rtl_menu_bar) ? Gravity.START : Gravity.END);
+        if (rows.getChildCount() > 0) rows.getChildAt(0).requestFocus();
+    }
+
+    private void addPowerMenuRow(LinearLayout rows, PopupWindow popup, int iconRes, int dotColor, int titleRes, Runnable action) {
+        View row = getLayoutInflater().inflate(R.layout.item_input, rows, false);
+        ImageView icon = row.findViewById(R.id.icon);
+        icon.setImageResource(iconRes);
+        icon.setVisibility(View.VISIBLE);
+        TextView title = row.findViewById(R.id.title);
+        title.setText(titleRes);
+        View dot = row.findViewById(R.id.dot);
+        dot.setVisibility(View.VISIBLE);
+        if (dot.getBackground() != null) {
+            dot.getBackground().mutate().setTint(dotColor);
+        }
+        row.findViewById(R.id.status).setVisibility(View.GONE);
+        row.setOnClickListener(v -> {
+            popup.dismiss();
+            action.run();
+        });
+        final boolean[] pressed = {false};
+        row.setOnKeyListener((v, code, event) -> {
+            if (code != KeyEvent.KEYCODE_DPAD_CENTER && code != KeyEvent.KEYCODE_ENTER) return false;
+            if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                if (event.getRepeatCount() == 0) pressed[0] = true;
+                return true;
+            }
+            boolean activate = pressed[0];
+            pressed[0] = false;
+            if (activate) {
+                popup.dismiss();
+                action.run();
+            }
+            return true;
+        });
+        rows.addView(row);
+    }
+
     /** A tile configured with launch_actions "input:<id>" (config.xml): switch to that TV input directly,
      *  the same path the Inputs menu's own rows use, instead of opening the input's owning app normally. */
     @Override
@@ -3735,6 +3865,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private long holdOkDown = -1;
     private int holdOkPosition = -1;
     private String holdOkKey;    // the app under OK when it went down; a tile rebuild can move another app to that slot
+    private AppAdapter.Entry holdOkBackgroundEntry;
+    private View holdOkBackgroundCard;
     private boolean holdOkFired;
     private final Runnable holdOkTimer = this::fireHoldOk;
 
@@ -3753,9 +3885,19 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 holdOkPosition = reordering || openPopup != null || cardPrompt != null ? -1 : focusedTilePosition();
                 holdOkKey = holdOkPosition < 0 || holdOkPosition >= adapter.appCount() ? null : adapter.keyAt(holdOkPosition);
                 if (holdOkKey == null) {
+                    View f = getCurrentFocus();
+                    if (f != null && f.getTag() instanceof AppAdapter.Entry) {
+                        holdOkBackgroundEntry = (AppAdapter.Entry) f.getTag();
+                        holdOkBackgroundCard = f;
+                        holdOkDown = event.getDownTime();
+                        handler.postDelayed(holdOkTimer, HOLD_OK_MS);
+                        return false;
+                    }
                     holdOkDown = -1;
                     return false;
                 }
+                holdOkBackgroundEntry = null;
+                holdOkBackgroundCard = null;
                 holdOkDown = event.getDownTime();
                 handler.postDelayed(holdOkTimer, HOLD_OK_MS);
                 return false;
@@ -3771,6 +3913,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         handler.removeCallbacks(holdOkTimer);
         holdOkDown = -1;
         holdOkKey = null;
+        holdOkBackgroundEntry = null;
+        holdOkBackgroundCard = null;
         if (holdOkFired) {
             holdOkFired = false;
             View f = getCurrentFocus();
@@ -3791,6 +3935,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         holdOkDown = -1;
         holdOkPosition = -1;
         holdOkKey = null;
+        holdOkBackgroundEntry = null;
+        holdOkBackgroundCard = null;
     }
 
     private void fireHoldOk() {
@@ -3798,6 +3944,15 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         if (holdOkDown < 0 || holdOkFired) return;
         holdOkFired = true;
         if (openPopup != null || reordering) return;   // View's own long click got there first
+        if (holdOkBackgroundEntry != null) {
+            View card = holdOkBackgroundCard;
+            AppAdapter.Entry entry = holdOkBackgroundEntry;
+            holdOkBackgroundEntry = null;
+            holdOkBackgroundCard = null;
+            if (card != null) card.setPressed(false);
+            onBackgroundAppLongClick(entry, card);
+            return;
+        }
         int position = holdOkPosition;
         if (position < 0 || position >= adapter.appCount() || position != focusedTilePosition()) return;
         // Same slot is not enough: tiles may have been rebuilt during the hold, so the app must match too.
@@ -3814,47 +3969,179 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         String pkg = adapter.packageAt(position);
         // Empty dock slots and the Default-home tile carry the launcher's own package: no menu for them.
         if (key == null || pkg == null || pkg.equals(getPackageName())) return;
+        AppAdapter.Entry e = adapter.findEntry(pkg);
+        String label = e != null ? e.label : pkg;
+        showAppContextMenu(pkg, label, card, position);
+    }
+
+    private void showAppContextMenu(String pkg, String label, View card, int gridPosition) {
+        if (reordering || openPopup != null) return;
+        if (pkg == null || pkg.equals(getPackageName())) return;
+
         View panel = getLayoutInflater().inflate(R.layout.popup_inputs, root, false);
         LinearLayout rows = panel.findViewById(R.id.rows);
         PopupWindow popup = glassPopup(panel, (int) (200 * density));
-        if (dockRow && position < adapter.movableCount()) {
-            boolean inDock = position < COLUMNS;
-            addSettingsMenuRow(rows, popup, inDock ? R.string.tile_replace_in_dock : R.string.tile_add_to_dock,
-                    () -> startDockEditFor(key, inDock));
-        }
-        if (position < adapter.movableCount()) addSettingsMenuRow(rows, popup, R.string.tile_move, () -> {
-            if (!beginReorder()) return;
-            int at = adapter.positionOf(key);   // beginReorder can rebuild the tiles
-            if (at < 0) return;
-            focusTile(at);
-            pickUp(at);
-            Toast.makeText(this, R.string.reorder_hint, Toast.LENGTH_LONG).show();
+
+        // 1. Cerrar
+        addSettingsMenuRow(rows, popup, R.string.tile_close_app, () -> {
+            RecentsManager.closeApp(this, pkg);
+            Toast.makeText(this, getString(R.string.app_closed, label != null ? label : pkg), Toast.LENGTH_SHORT).show();
+            updateBackgroundApps();
+            if (gridPosition < 0) {
+                if (!adapter.hasBackgroundApps()) {
+                    int lastTile = adapter.appCount() - 1;
+                    if (lastTile >= 0) focusTile(lastTile);
+                } else {
+                    focusBackgroundApp(0);
+                }
+            }
         });
-        if (appLibraryEnabled) addSettingsMenuRow(rows, popup, R.string.library_remove_shortcut, () -> {
-            if (LibraryApps.save(this, pkg, false)) reloadApps(false);
-            else Toast.makeText(this, R.string.library_save_failed, Toast.LENGTH_LONG).show();
-        });
-        // Some firmware has no App info page at all; a row that only toasts "can't open" helps nobody.
+
+        // 2. Información de la app
         Intent info = SystemSettings.appInfo(this, pkg);
-        if (info != null) addSettingsMenuRow(rows, popup, R.string.library_app_info, () -> open(info));
+        if (info == null) {
+            info = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + pkg));
+        }
+        final Intent finalInfo = info;
+        addSettingsMenuRow(rows, popup, R.string.library_app_info, () -> open(finalInfo));
+
+        // 3. Grid-specific actions (Move, Replace in dock, Remove shortcut)
+        if (gridPosition >= 0 && adapter != null) {
+            String key = adapter.keyAt(gridPosition);
+            if (dockRow && gridPosition < adapter.movableCount()) {
+                boolean inDock = gridPosition < COLUMNS;
+                addSettingsMenuRow(rows, popup, inDock ? R.string.tile_replace_in_dock : R.string.tile_add_to_dock,
+                        () -> startDockEditFor(key, inDock));
+            }
+            if (gridPosition < adapter.movableCount()) {
+                addSettingsMenuRow(rows, popup, R.string.tile_move, () -> {
+                    if (!beginReorder()) return;
+                    int at = adapter.positionOf(key);
+                    if (at < 0) return;
+                    focusTile(at);
+                    pickUp(at);
+                    Toast.makeText(this, R.string.reorder_hint, Toast.LENGTH_LONG).show();
+                });
+            }
+            if (appLibraryEnabled) {
+                addSettingsMenuRow(rows, popup, R.string.library_remove_shortcut, () -> {
+                    if (LibraryApps.save(this, pkg, false)) reloadApps(false);
+                    else Toast.makeText(this, R.string.library_save_failed, Toast.LENGTH_LONG).show();
+                });
+            }
+        }
+
         panel.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
         popup.setWidth(Math.max((int) (200 * density), panel.getMeasuredWidth()));
-        // Dock tiles sit near the bottom of the screen: open the menu above the tile when it would not fit below.
+
         int[] at = new int[2];
-        card.getLocationInWindow(at);
-        int gap = (int) (10 * density), height = panel.getMeasuredHeight();
-        if (at[1] + card.getHeight() + gap + height <= root.getHeight()) {
-            dropIn(popup, panel, card, Gravity.START);
+        if (card != null) {
+            card.getLocationInWindow(at);
+            int gap = (int) (10 * density), height = panel.getMeasuredHeight();
+            if (at[1] + card.getHeight() + gap + height <= root.getHeight()) {
+                dropIn(popup, panel, card, Gravity.START);
+            } else {
+                panel.setAlpha(0f);
+                panel.setPivotY(height);
+                panel.setScaleY(0.92f);
+                panel.setTranslationY(8 * density);
+                popup.showAtLocation(root, Gravity.NO_GRAVITY, at[0], Math.max(0, at[1] - gap - height));
+                panel.animate().alpha(1f).scaleY(1f).translationY(0f).setDuration(220)
+                        .setInterpolator(new android.view.animation.DecelerateInterpolator(1.6f)).start();
+            }
         } else {
-            panel.setAlpha(0f);
-            panel.setPivotY(height);
-            panel.setScaleY(0.92f);
-            panel.setTranslationY(8 * density);
-            popup.showAtLocation(root, Gravity.NO_GRAVITY, at[0], Math.max(0, at[1] - gap - height));
-            panel.animate().alpha(1f).scaleY(1f).translationY(0f).setDuration(220)
-                    .setInterpolator(new android.view.animation.DecelerateInterpolator(1.6f)).start();
+            popup.showAtLocation(root, Gravity.CENTER, 0, 0);
         }
         rows.getChildAt(0).requestFocus();
+    }
+
+    @Override
+    public void onBackgroundAppClick(AppAdapter.Entry entry) {
+        if (entry != null && adapter != null) {
+            adapter.launch(entry);
+        }
+    }
+
+    @Override
+    public void onBackgroundAppLongClick(AppAdapter.Entry entry, View card) {
+        if (entry != null) {
+            showAppContextMenu(entry.pkg, entry.label, card, -1);
+        }
+    }
+
+    @Override
+    public void onBackgroundAppFocused(AppAdapter.Entry entry, View card) {
+        hideGlass();
+        hideHero();
+    }
+
+    @Override
+    public void onBackgroundAppUp(int column) {
+        int count = adapter.appCount();
+        if (count == 0) {
+            firstTopButton().requestFocus();
+            return;
+        }
+        int lastRowStart = ((count - 1) / COLUMNS) * COLUMNS;
+        int target = Math.min(lastRowStart + column, count - 1);
+        focusTile(target);
+    }
+
+    private void focusBackgroundApp(int column) {
+        if (!adapter.hasBackgroundApps()) return;
+        int pos = adapter.appCount();
+        RecyclerView.ViewHolder vh = grid.findViewHolderForAdapterPosition(pos);
+        if (vh instanceof AppAdapter.BackgroundAppsHolder) {
+            AppAdapter.BackgroundAppsHolder bh = (AppAdapter.BackgroundAppsHolder) vh;
+            View card = bh.getCard(column);
+            if (card != null) {
+                card.requestFocus();
+                return;
+            }
+        }
+        grid.smoothScrollToPosition(pos);
+        grid.postDelayed(() -> {
+            RecyclerView.ViewHolder holder = grid.findViewHolderForAdapterPosition(pos);
+            if (holder instanceof AppAdapter.BackgroundAppsHolder) {
+                AppAdapter.BackgroundAppsHolder bh = (AppAdapter.BackgroundAppsHolder) holder;
+                View card = bh.getCard(column);
+                if (card != null) card.requestFocus();
+            }
+        }, 120);
+    }
+
+    private void updateBackgroundApps() {
+        if (adapter == null) return;
+        List<String> pkgs = RecentsManager.getRecentPackages(this);
+        List<AppAdapter.Entry> entries = new ArrayList<>();
+        for (String pkg : pkgs) {
+            AppAdapter.Entry e = resolveEntry(pkg);
+            if (e != null) entries.add(e);
+        }
+        adapter.setBackgroundApps(entries);
+    }
+
+    private AppAdapter.Entry resolveEntry(String pkg) {
+        if (adapter != null) {
+            AppAdapter.Entry e = adapter.findEntry(pkg);
+            if (e != null) return e;
+        }
+        try {
+            PackageManager pm = getPackageManager();
+            Intent intent = pm.getLeanbackLaunchIntentForPackage(pkg);
+            if (intent == null) intent = pm.getLaunchIntentForPackage(pkg);
+            if (intent != null && intent.getComponent() != null) {
+                ApplicationInfo ai = pm.getApplicationInfo(pkg, 0);
+                String label = pm.getApplicationLabel(ai).toString();
+                Drawable banner = null;
+                try {
+                    banner = pm.getActivityBanner(intent.getComponent());
+                } catch (Exception ignored) {}
+                Drawable icon = pm.getApplicationIcon(ai);
+                return new AppAdapter.Entry(label, intent.getComponent(), banner, icon);
+            }
+        } catch (Exception ignored) {}
+        return null;
     }
 
     private void addSettingsMenuRow(LinearLayout rows, PopupWindow popup, int title, Runnable action) {

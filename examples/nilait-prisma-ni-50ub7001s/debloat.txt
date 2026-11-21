@@ -1,0 +1,58 @@
+# Nilait Prisma NI-50UB7001S 50" Android TV (Vestel-built, board BODRUM, device finch, MediaTek m7332)
+# Android TV 14 (API 34), firmware UKNV.260428.001.
+# ro.product.manufacturer = vestel, ro.product.model = "Android TV", ro.product.device = finch
+# Same Vestel platform as examples/prosonic-bodrum-finch.
+#
+# Apply:   tools\disable.ps1 examples\nilait-prisma-ni-50ub7001s\debloat.txt
+# Undo:    tools\restore.ps1 examples\nilait-prisma-ni-50ub7001s\debloat.txt
+# Everything is DISABLED with 'pm disable-user --user 0', never uninstalled.
+#
+# CRITICAL PACKAGES KEPT ENABLED:
+# - fusion.android.tv.demo: receives com.mstar.android.intent.action.TV_INPUT_BUTTON (Input remote button)
+# - com.mediatek.android.leanbacklauncher.partnercustomizer: prevents crash-looping of com.mediatek.tv.service
+# - com.vestel.tv.eib: handles TV input button and signal events
+# - com.vestel.tv.service, com.vestel.tv.keycontroller, com.vestel.tv.backlight: panel & remote control
+# - com.mediatek.wwtv.tvcenter: Live TV / TDT app
+# - com.mediatek.tvinput, com.mediatek.tv.service: TV Input framework (HDMI ports, tuner)
+# - com.mediatek.autopair: Bluetooth remote pairing
+# - com.dolby.android.audio.service: Dolby audio processing
+# - com.google.android.inputmethod.latin: Gboard on-screen keyboard
+
+# Vestel telemetry, logging and cleaner
+com.vestel.vestelreporter
+com.vestel.smartlogger
+com.vestel.tv.speedup
+com.vestel.smartcenter
+android.autoinstalls.config.vestel.malin
+
+# Google ads, personalization and feedback
+com.android.adservices.api
+com.android.ondevicepersonalization.services
+com.android.federatedcompute.services
+com.google.android.partnersetup
+com.google.android.feedback
+com.android.tv.feedbackconsent
+
+# Dead weight / Unused components on TV
+com.android.healthconnect.controller
+com.android.health.connect.backuprestore
+com.android.managedprovisioning
+com.android.dynsystem
+com.android.cts.ctsshim
+com.android.cts.priv.ctsshim
+com.google.android.syncadapters.calendar
+com.android.htmlviewer
+com.android.backupconfirm
+com.android.se
+# com.android.devicelockcontroller                 # Android 14 protected package (cannot disable)
+
+# Streaming apps not used (per user selection)
+com.disney.disneyplus
+org.videolan.vlc
+
+# Kept active per user selection:
+# com.google.android.katniss                  # Google Assistant / Voice remote
+# com.google.android.apps.mediashell          # Chromecast built-in
+# com.netflix.ninja                           # Netflix
+# com.google.android.youtube.tv               # YouTube
+# org.courville.nova                          # Nova Video Player

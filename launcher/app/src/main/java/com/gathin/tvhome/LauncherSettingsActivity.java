@@ -34,6 +34,41 @@ public final class LauncherSettingsActivity extends Activity {
     private final TextView[] dockChoices = new TextView[DOCK_OPACITIES.length];
     private static final String[] CLOCK_FORMATS = {"system", "12", "24"};
     private final TextView[] clockChoices = new TextView[CLOCK_FORMATS.length];
+    private static final String[] SCREENSAVER_MODES = {"nature", "art", "mix", "clock"};
+    private final TextView[] screensaverChoices = new TextView[SCREENSAVER_MODES.length];
+    private static final String[] SCREENSAVER_TIMEOUTS = {"30s", "1m", "5m"};
+    private final TextView[] screensaverTimeoutChoices = new TextView[SCREENSAVER_TIMEOUTS.length];
+    private TextView screensaverStartNow;
+    private static final String[] QUOTES_TYPES = {"all", "quotes_only", "poems_only"};
+    private final TextView[] quotesTypeChoices = new TextView[QUOTES_TYPES.length];
+    private static final String[] QUOTES_SPEEDS = {"fast", "normal", "slow"};
+    private final TextView[] quotesSpeedChoices = new TextView[QUOTES_SPEEDS.length];
+
+    private static final String[] AUTHOR_KEYS = {
+            "biblia", "poesia", "gracian", "seneca", "marco_aurelio",
+            "maquiavelo", "epicteto", "sun_tzu", "franklin", "kempis", "tracy", "kiyosaki"
+    };
+    private static final String[] AUTHOR_NAMES = {
+            "Biblia (Reina-Valera 1909)",
+            "Poesía de dominio público",
+            "Baltasar Gracián",
+            "Séneca",
+            "Marco Aurelio",
+            "Nicolás Maquiavelo",
+            "Epicteto",
+            "Sun Tzu",
+            "Benjamin Franklin",
+            "Tomás de Kempis",
+            "Brian Tracy",
+            "Robert Kiyosaki"
+    };
+
+    private TextView quotesToggleChoice;
+    private TextView quotesAuthorsChoice;
+    private String screensaverTimeout;
+    private boolean quotesEnabled;
+    private String quotesTypeFilter;
+    private String quotesSpeed;
     private TextView wallpaperChoice;
     private TextView animationsChoice;
     private TextView advancedChoice;
@@ -43,6 +78,7 @@ public final class LauncherSettingsActivity extends Activity {
     private int rowsBelowDock;
     private int dockOpacity;
     private String clockFormat;
+    private String screensaverMode;
     private boolean animations;
     private boolean advancedEffects;
 
@@ -113,6 +149,78 @@ public final class LauncherSettingsActivity extends Activity {
                 refresh();
             });
         }
+        screensaverMode = choices.getString("screensaver_mode", "nature");
+        int[] screensaverIds = {R.id.screensaverNature, R.id.screensaverArt, R.id.screensaverMix, R.id.screensaverClock};
+        for (int i = 0; i < screensaverIds.length; i++) {
+            final String value = SCREENSAVER_MODES[i];
+            screensaverChoices[i] = findViewById(screensaverIds[i]);
+            screensaverChoices[i].setOnClickListener(v -> {
+                if (value.equals(screensaverMode)) return;
+                screensaverMode = value;
+                choices.edit().putString("screensaver_mode", value).apply();
+                changed();
+                refresh();
+            });
+        }
+        screensaverTimeout = choices.getString("screensaver_timeout", "1m");
+        screensaverStartNow = findViewById(R.id.screensaverStartNow);
+        if (screensaverStartNow != null) {
+            screensaverStartNow.setOnClickListener(v -> {
+                startActivity(new Intent(this, ClockActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            });
+        }
+        int[] screensaverTimeoutIds = {R.id.screensaverTimeout30s, R.id.screensaverTimeout1m, R.id.screensaverTimeout5m};
+        for (int i = 0; i < screensaverTimeoutIds.length; i++) {
+            final String value = SCREENSAVER_TIMEOUTS[i];
+            screensaverTimeoutChoices[i] = findViewById(screensaverTimeoutIds[i]);
+            screensaverTimeoutChoices[i].setOnClickListener(v -> {
+                if (value.equals(screensaverTimeout)) return;
+                screensaverTimeout = value;
+                choices.edit().putString("screensaver_timeout", value).apply();
+                changed();
+                refresh();
+            });
+        }
+
+        quotesEnabled = choices.getBoolean("quotes_enabled", true);
+        quotesToggleChoice = findViewById(R.id.quotesToggleChoice);
+        quotesToggleChoice.setOnClickListener(v -> {
+            quotesEnabled = !quotesEnabled;
+            choices.edit().putBoolean("quotes_enabled", quotesEnabled).apply();
+            changed();
+            refresh();
+        });
+
+        quotesTypeFilter = choices.getString("quotes_type_filter", "all");
+        int[] quotesTypeIds = {R.id.quotesTypeAll, R.id.quotesTypeQuotes, R.id.quotesTypePoems};
+        for (int i = 0; i < quotesTypeIds.length; i++) {
+            final String value = QUOTES_TYPES[i];
+            quotesTypeChoices[i] = findViewById(quotesTypeIds[i]);
+            quotesTypeChoices[i].setOnClickListener(v -> {
+                if (value.equals(quotesTypeFilter)) return;
+                quotesTypeFilter = value;
+                choices.edit().putString("quotes_type_filter", value).apply();
+                changed();
+                refresh();
+            });
+        }
+
+        quotesSpeed = choices.getString("quotes_speed", "normal");
+        int[] quotesSpeedIds = {R.id.quotesSpeedFast, R.id.quotesSpeedNormal, R.id.quotesSpeedSlow};
+        for (int i = 0; i < quotesSpeedIds.length; i++) {
+            final String value = QUOTES_SPEEDS[i];
+            quotesSpeedChoices[i] = findViewById(quotesSpeedIds[i]);
+            quotesSpeedChoices[i].setOnClickListener(v -> {
+                if (value.equals(quotesSpeed)) return;
+                quotesSpeed = value;
+                choices.edit().putString("quotes_speed", value).apply();
+                changed();
+                refresh();
+            });
+        }
+
+        quotesAuthorsChoice = findViewById(R.id.quotesAuthorsChoice);
+        quotesAuthorsChoice.setOnClickListener(v -> showAuthorsDialog());
         // Mirror text alignment without globally opting the launcher into RTL. Numeric rows
         // still need explicit ordering in Android's no-supportsRtl compatibility mode.
         if (getResources().getBoolean(R.bool.rtl_menu_bar))
@@ -122,6 +230,8 @@ public final class LauncherSettingsActivity extends Activity {
             reverseRow(rowChoices);
             reverseRow(dockChoices);
             reverseRow(clockChoices);
+            reverseRow(screensaverChoices);
+            reverseRow(screensaverTimeoutChoices);
         }
         wallpaperChoice = findViewById(R.id.wallpaperChoice);
         wallpaperChoice.setOnClickListener(v -> showWallpaperPicker());
@@ -157,12 +267,20 @@ public final class LauncherSettingsActivity extends Activity {
             if (!hasOnTvChoices()) return;
             choices.edit().remove("columns").remove(Config.ROWS_BELOW_DOCK_KEY).remove("animations")
                     .remove("advanced_effects").remove(Config.WALLPAPER_CHOICE_KEY)
-                    .remove(Config.DOCK_OPACITY_KEY).remove(Config.CLOCK_FORMAT_KEY).remove(OpenOnStart.KEY).commit();
+                    .remove(Config.DOCK_OPACITY_KEY).remove(Config.CLOCK_FORMAT_KEY)
+                    .remove("screensaver_mode").remove("screensaver_timeout")
+                    .remove("quotes_enabled").remove("quotes_type_filter").remove("quotes_speed")
+                    .remove(OpenOnStart.KEY).commit();
             Config current = Config.load(this);
             columns = current.columns;
             rowsBelowDock = current.rowsBelowDock;
             dockOpacity = current.dockOpacity;
             clockFormat = current.clockFormat;
+            screensaverMode = choices.getString("screensaver_mode", "nature");
+            screensaverTimeout = choices.getString("screensaver_timeout", "1m");
+            quotesEnabled = choices.getBoolean("quotes_enabled", true);
+            quotesTypeFilter = choices.getString("quotes_type_filter", "all");
+            quotesSpeed = choices.getString("quotes_speed", "normal");
             animations = current.animations;
             advancedEffects = current.animations && current.advancedEffects;
             changed();
@@ -275,6 +393,21 @@ public final class LauncherSettingsActivity extends Activity {
         return -1;
     }
 
+    private void showAuthorsDialog() {
+        boolean[] checked = new boolean[AUTHOR_KEYS.length];
+        for (int i = 0; i < AUTHOR_KEYS.length; i++) {
+            checked[i] = choices.getBoolean("quote_author_" + AUTHOR_KEYS[i], true);
+        }
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.quotes_authors_dialog_title)
+                .setMultiChoiceItems(AUTHOR_NAMES, checked, (dialog, which, isChecked) -> {
+                    choices.edit().putBoolean("quote_author_" + AUTHOR_KEYS[which], isChecked).apply();
+                    changed();
+                })
+                .setPositiveButton(android.R.string.ok, null)
+                .show();
+    }
+
     /**
      * A choice was saved. Home rebuilds when it next resumes because the change count moved, whether these
      * settings are left with Back or with the remote's Home button (which cancels the activity result).
@@ -305,6 +438,19 @@ public final class LauncherSettingsActivity extends Activity {
         for (int i = 0; i < clockChoices.length; i++) {
             clockChoices[i].setSelected(CLOCK_FORMATS[i].equals(clockFormat));
         }
+        for (int i = 0; i < screensaverChoices.length; i++) {
+            screensaverChoices[i].setSelected(SCREENSAVER_MODES[i].equals(screensaverMode));
+        }
+        for (int i = 0; i < screensaverTimeoutChoices.length; i++) {
+            screensaverTimeoutChoices[i].setSelected(SCREENSAVER_TIMEOUTS[i].equals(screensaverTimeout));
+        }
+        quotesToggleChoice.setText(getString(quotesEnabled ? R.string.quotes_enabled_on : R.string.quotes_enabled_off));
+        for (int i = 0; i < quotesTypeChoices.length; i++) {
+            quotesTypeChoices[i].setSelected(QUOTES_TYPES[i].equals(quotesTypeFilter));
+        }
+        for (int i = 0; i < quotesSpeedChoices.length; i++) {
+            quotesSpeedChoices[i].setSelected(QUOTES_SPEEDS[i].equals(quotesSpeed));
+        }
         animationsChoice.setText(getString(R.string.animations_state,
                 getString(animations ? R.string.on : R.string.off)));
         advancedChoice.setText(getString(R.string.advanced_effects_state,
@@ -324,7 +470,10 @@ public final class LauncherSettingsActivity extends Activity {
         return choices.contains("columns") || choices.contains(Config.ROWS_BELOW_DOCK_KEY)
                 || choices.contains("animations") || choices.contains("advanced_effects")
                 || choices.contains(Config.WALLPAPER_CHOICE_KEY) || choices.contains(Config.DOCK_OPACITY_KEY)
-                || choices.contains(Config.CLOCK_FORMAT_KEY) || choices.contains(OpenOnStart.KEY);
+                || choices.contains(Config.CLOCK_FORMAT_KEY) || choices.contains("screensaver_mode")
+                || choices.contains("screensaver_timeout") || choices.contains("quotes_enabled")
+                || choices.contains("quotes_type_filter") || choices.contains("quotes_speed")
+                || choices.contains(OpenOnStart.KEY);
     }
 
     private void open(Intent intent) {
